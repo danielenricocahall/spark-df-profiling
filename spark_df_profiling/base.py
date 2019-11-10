@@ -95,59 +95,14 @@ def describe(df, bins, corr_reject, config, **kwargs):
 
     # Compute histogram (is not as easy as it looks):
     def create_hist_data(df, column, minim, maxim, bins=10):
-
-        def create_all_conditions(current_col, column, left_edges, count=1):
-            """
-            Recursive function that exploits the
-            ability to call the Spark SQL Column method
-            .when() in a recursive way.
-            """
-            left_edges = left_edges[:]
-            if len(left_edges) == 0:
-                return current_col
-            if len(left_edges) == 1:
-                next_col = current_col.when(col(column) >= float(left_edges[0]), count)
-                left_edges.pop(0)
-                return create_all_conditions(next_col, column, left_edges[:], count+1)
-            next_col = current_col.when((float(left_edges[0]) <= col(column))
-                                        & (col(column) < float(left_edges[1])), count)
-            left_edges.pop(0)
-            return create_all_conditions(next_col, column, left_edges[:], count+1)
-
-        num_range = maxim - minim
-        bin_width = num_range / float(bins)
-        left_edges = [minim]
-        for _bin in range(bins):
-            left_edges = left_edges + [left_edges[-1] + bin_width]
-        left_edges.pop()
-        expression_col = when((float(left_edges[0]) <= col(column))
-                              & (col(column) < float(left_edges[1])), 0)
-        left_edges_copy = left_edges[:]
-        left_edges_copy.pop(0)
-        bin_data = (df.select(col(column))
-                    .na.drop()
-                    .select(col(column),
-                            create_all_conditions(expression_col,
-                                                  column,
-                                                  left_edges_copy
-                                                 ).alias("bin_id")
-                           )
-                    .groupBy("bin_id").count()
-                   ).toPandas()
-
-        # If no data goes into one bin, it won't 
-        # appear in bin_data; so we should fill
-        # in the blanks:
-        bin_data.index = bin_data["bin_id"]
-        new_index = list(range(bins))
-        bin_data = bin_data.reindex(new_index)
-        bin_data["bin_id"] = bin_data.index
-        bin_data = bin_data.fillna(0)
-
-        # We add the left edges and bin width:
-        bin_data["left_edge"] = left_edges
-        bin_data["width"] = bin_width
-
+        left_edges, counts = df.select(column).rdd.flatMap(lambda x: x).histogram(bins)
+        bin_width = (maxim - minim) / float(bins)
+        bin_data = pd.DataFrame([])
+        bin_data['count'] = [float(i) for i in counts]
+        bin_data.index = list(range(bins))
+        bin_data['bin_id'] = bin_data.index
+        bin_data["left_edge"] = left_edges[:-1]
+        bin_data['width'] = bin_width
         return bin_data
 
     def mini_histogram(histogram_data):
